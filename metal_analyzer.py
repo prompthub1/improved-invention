@@ -13,11 +13,7 @@ import sys
 # تنظیمات پیشرفته لاگ‌گیری
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('metal_analyzer.log')
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
 class MetalMarketAnalyzer:
@@ -26,8 +22,12 @@ class MetalMarketAnalyzer:
         self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
         
-        logging.info(f"TELEGRAM_BOT_TOKEN: {'***' if self.bot_token else 'NOT SET'}")
-        logging.info(f"TELEGRAM_CHANNEL_ID: {'***' if self.channel_id else 'NOT SET'}")
+        # اگر channel_id با @ شروع شود، باید به عدد تبدیل شود
+        if self.channel_id and self.channel_id.startswith('@'):
+            self.channel_id = self.convert_to_chat_id(self.channel_id)
+        
+        logging.info(f"TELEGRAM_BOT_TOKEN: {'***' + self.bot_token[-4:] if self.bot_token else 'NOT SET'}")
+        logging.info(f"TELEGRAM_CHANNEL_ID: {self.channel_id}")
         
         if not self.bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN تنظیم نشده است")
@@ -38,7 +38,31 @@ class MetalMarketAnalyzer:
             'gold': 'GC=F',
             'silver': 'SI=F'
         }
-        
+    
+    def convert_to_chat_id(self, channel_username: str) -> str:
+        """تبدیل آیدی کانال به Chat ID عددی"""
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data['ok'] and data['result']:
+                    for update in data['result']:
+                        if 'channel_post' in update:
+                            chat = update['channel_post']['chat']
+                            if chat.get('username') == channel_username[1:]:  # حذف @
+                                chat_id = chat['id']
+                                logging.info(f"کانال {channel_username} با Chat ID {chat_id} پیدا شد")
+                                return str(chat_id)
+            
+            logging.warning(f"نمی‌توان Chat ID کانال {channel_username} را پیدا کرد")
+            return channel_username  # بازگشت به حالت قبلی اگر پیدا نشد
+            
+        except Exception as e:
+            logging.error(f"خطا در تبدیل آیدی کانال: {e}")
+            return channel_username
+    
     def is_holiday(self, date: datetime) -> bool:
         """بررسی تعطیلی بازار"""
         holidays = [
@@ -99,24 +123,30 @@ class MetalMarketAnalyzer:
             indicators = {}
             
             # RSI
-            indicators['rsi'] = talib.RSI(close_prices, timeperiod=14)[-1]
+            rsi = talib.RSI(close_prices, timeperiod=14)
+            indicators['rsi'] = rsi[-1] if len(rsi) > 0 else 50
             
             # Moving Averages
-            indicators['sma_20'] = talib.SMA(close_prices, timeperiod=20)[-1]
-            indicators['sma_50'] = talib.SMA(close_prices, timeperiod=50)[-1]
+            sma_20 = talib.SMA(close_prices, timeperiod=20)
+            sma_50 = talib.SMA(close_prices, timeperiod=50)
+            indicators['sma_20'] = sma_20[-1] if len(sma_20) > 0 else 0
+            indicators['sma_50'] = sma_50[-1] if len(sma_50) > 0 else 0
             
             # MACD
             macd, macd_signal, macd_hist = talib.MACD(close_prices)
-            indicators['macd'] = macd[-1]
-            indicators['macd_signal'] = macd_signal[-1]
-            indicators['macd_hist'] = macd_hist[-1]
+            indicators['macd'] = macd[-1] if len(macd) > 0 else 0
+            indicators['macd_signal'] = macd_signal[-1] if len(macd_signal) > 0 else 0
+            indicators['macd_hist'] = macd_hist[-1] if len(macd_hist) > 0 else 0
             
             # Bollinger Bands
             bb_upper, bb_middle, bb_lower = talib.BBANDS(close_prices, timeperiod=20, nbdevup=2, nbdevdn=2)
-            indicators['bb_upper'] = bb_upper[-1]
-            indicators['bb_middle'] = bb_middle[-1]
-            indicators['bb_lower'] = bb_lower[-1]
-            indicators['bb_position'] = (close_prices[-1] - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1])
+            if len(bb_upper) > 0 and len(bb_lower) > 0:
+                indicators['bb_upper'] = bb_upper[-1]
+                indicators['bb_middle'] = bb_middle[-1]
+                indicators['bb_lower'] = bb_lower[-1]
+                indicators['bb_position'] = (close_prices[-1] - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1])
+            else:
+                indicators['bb_position'] = 0.5
             
             return indicators
         except Exception as e:
@@ -357,72 +387,90 @@ class MetalMarketAnalyzer:
                 'parse_mode': 'HTML'
             }
             
-            logging.info(f"ارسال پیام به تلگرام: {message[:100]}...")
+            logging.info(f"ارسال پیام به تلگرام (طول: {len(message)} کاراکتر)")
             response = requests.post(url, data=payload, timeout=30)
             
             if response.status_code == 200:
-                logging.info("پیام با موفقیت ارسال شد")
+                logging.info("✅ پیام با موفقیت ارسال شد")
+                return True
             else:
-                logging.error(f"خطا در ارسال پیام: {response.status_code} - {response.text}")
-                # اطلاعات بیشتر برای دیباگ
-                logging.error(f"URL: {url}")
-                logging.error(f"Channel ID: {self.channel_id}")
+                error_msg = response.json().get('description', 'Unknown error')
+                logging.error(f"❌ خطا در ارسال پیام: {response.status_code} - {error_msg}")
+                return False
                 
         except requests.exceptions.Timeout:
-            logging.error("Timeout در ارسال پیام به تلگرام")
+            logging.error("⏰ Timeout در ارسال پیام به تلگرام")
+            return False
         except requests.exceptions.ConnectionError:
-            logging.error("Connection Error در ارسال پیام به تلگرام")
+            logging.error("🔌 Connection Error در ارسال پیام به تلگرام")
+            return False
         except Exception as e:
-            logging.error(f"خطای غیرمنتظره در ارسال پیام: {e}")
+            logging.error(f"🚨 خطای غیرمنتظره در ارسال پیام: {e}")
+            return False
     
     def run_analysis(self):
         """اجرای تحلیل اصلی"""
         try:
-            logging.info("شروع تحلیل...")
+            logging.info("🚀 شروع تحلیل...")
             
             if not self.should_analyze():
-                logging.info("تحلیل لغو شد - بازار تعطیل است")
+                logging.info("⏸️ تحلیل لغو شد - بازار تعطیل است")
                 return
             
             now = datetime.now()
             current_hour = now.hour
             current_minute = now.minute
             
-            logging.info(f"زمان فعلی: {current_hour}:{current_minute}")
+            logging.info(f"🕒 زمان فعلی: {current_hour}:{current_minute}")
             
             # گزارش روزانه ساعت 4:30
             if current_hour == 4 and current_minute >= 30:
-                logging.info("ارسال گزارش روزانه...")
+                logging.info("📊 ارسال گزارش روزانه...")
                 daily_report = self.get_daily_summary()
-                self.send_telegram_message(daily_report)
+                success = self.send_telegram_message(daily_report)
+                if success:
+                    logging.info("✅ گزارش روزانه ارسال شد")
+                else:
+                    logging.error("❌ خطا در ارسال گزارش روزانه")
             
             # تحلیل هر 4 ساعت از 5 صبح
             analysis_hours = [5, 9, 13, 17, 21]
             if current_hour in analysis_hours:
-                logging.info("شروع تحلیل فلزات...")
+                logging.info("🔍 شروع تحلیل فلزات...")
                 
                 # تحلیل طلا
                 gold_analysis = self.analyze_metal('gold')
-                self.send_telegram_message(gold_analysis)
+                success_gold = self.send_telegram_message(gold_analysis)
+                if success_gold:
+                    logging.info("✅ تحلیل طلا ارسال شد")
+                else:
+                    logging.error("❌ خطا در ارسال تحلیل طلا")
                 
                 # فاصله بین ارسال پیام‌ها
-                time.sleep(10)
+                time.sleep(5)
                 
                 # تحلیل نقره
                 silver_analysis = self.analyze_metal('silver')
-                self.send_telegram_message(silver_analysis)
+                success_silver = self.send_telegram_message(silver_analysis)
+                if success_silver:
+                    logging.info("✅ تحلیل نقره ارسال شد")
+                else:
+                    logging.error("❌ خطا در ارسال تحلیل نقره")
             
-            logging.info("تحلیل با موفقیت завер شد")
+            logging.info("🎉 تحلیل با موفقیت завер شد")
             
         except Exception as e:
-            logging.error(f"خطای کلی در اجرای برنامه: {e}")
+            logging.error(f"💥 خطای کلی در اجرای برنامه: {e}")
 
 def main():
     try:
         analyzer = MetalMarketAnalyzer()
         analyzer.run_analysis()
+    except ValueError as e:
+        logging.error(f"❌ خطا در تنظیمات: {e}")
+        sys.exit(1)
     except Exception as e:
-        logging.error(f"خطا در اجرای برنامه: {e}")
+        logging.error(f"💥 خطای غیرمنتظره: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
