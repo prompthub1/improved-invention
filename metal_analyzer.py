@@ -8,9 +8,17 @@ import logging
 from typing import Dict, Tuple, List
 import talib
 import os
+import sys
 
-# تنظیمات اولیه
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# تنظیمات پیشرفته لاگ‌گیری
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('metal_analyzer.log')
+    ]
+)
 
 class MetalMarketAnalyzer:
     def __init__(self):
@@ -18,8 +26,13 @@ class MetalMarketAnalyzer:
         self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
         
-        if not self.bot_token or not self.channel_id:
-            raise ValueError("لطفا TELEGRAM_BOT_TOKEN و TELEGRAM_CHANNEL_ID را تنظیم کنید")
+        logging.info(f"TELEGRAM_BOT_TOKEN: {'***' if self.bot_token else 'NOT SET'}")
+        logging.info(f"TELEGRAM_CHANNEL_ID: {'***' if self.channel_id else 'NOT SET'}")
+        
+        if not self.bot_token:
+            raise ValueError("TELEGRAM_BOT_TOKEN تنظیم نشده است")
+        if not self.channel_id:
+            raise ValueError("TELEGRAM_CHANNEL_ID تنظیم نشده است")
             
         self.metals = {
             'gold': 'GC=F',
@@ -31,7 +44,10 @@ class MetalMarketAnalyzer:
         holidays = [
             '2024-01-01', '2024-01-15', '2024-02-19', '2024-03-29',
             '2024-05-27', '2024-07-04', '2024-09-02', '2024-11-28',
-            '2024-12-25'
+            '2024-12-25',
+            '2025-01-01', '2025-01-15', '2025-02-19', '2025-03-29',
+            '2025-05-27', '2025-07-04', '2025-09-02', '2025-11-28',
+            '2025-12-25'
         ]
         return date.strftime('%Y-%m-%d') in holidays
     
@@ -59,180 +75,195 @@ class MetalMarketAnalyzer:
     def get_metal_data(self, symbol: str, period: str = '1mo') -> pd.DataFrame:
         """دریافت داده‌های فلز"""
         try:
+            logging.info(f"دریافت داده برای {symbol} با دوره {period}")
             ticker = yf.Ticker(symbol)
             data = ticker.history(period=period, interval='15m')
+            logging.info(f"تعداد داده‌های دریافت شده: {len(data)}")
             return data
         except Exception as e:
-            logging.error(f"Error fetching data for {symbol}: {e}")
+            logging.error(f"خطا در دریافت داده برای {symbol}: {e}")
             return None
     
     def calculate_indicators(self, data: pd.DataFrame) -> Dict:
         """محاسبه اندیکاتورهای تکنیکال"""
         if len(data) < 50:
+            logging.warning("داده کافی برای محاسبه اندیکاتورها موجود نیست")
             return {}
         
-        close_prices = data['Close'].values
-        high_prices = data['High'].values
-        low_prices = data['Low'].values
-        
-        # محاسبه اندیکاتورها
-        indicators = {}
-        
-        # RSI
-        indicators['rsi'] = talib.RSI(close_prices, timeperiod=14)[-1]
-        
-        # Moving Averages
-        indicators['sma_20'] = talib.SMA(close_prices, timeperiod=20)[-1]
-        indicators['sma_50'] = talib.SMA(close_prices, timeperiod=50)[-1]
-        
-        # MACD
-        macd, macd_signal, macd_hist = talib.MACD(close_prices)
-        indicators['macd'] = macd[-1]
-        indicators['macd_signal'] = macd_signal[-1]
-        indicators['macd_hist'] = macd_hist[-1]
-        
-        # Bollinger Bands
-        bb_upper, bb_middle, bb_lower = talib.BBANDS(close_prices, timeperiod=20, nbdevup=2, nbdevdn=2)
-        indicators['bb_upper'] = bb_upper[-1]
-        indicators['bb_middle'] = bb_middle[-1]
-        indicators['bb_lower'] = bb_lower[-1]
-        indicators['bb_position'] = (close_prices[-1] - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1])
-        
-        return indicators
+        try:
+            close_prices = data['Close'].values
+            high_prices = data['High'].values
+            low_prices = data['Low'].values
+            
+            # محاسبه اندیکاتورها
+            indicators = {}
+            
+            # RSI
+            indicators['rsi'] = talib.RSI(close_prices, timeperiod=14)[-1]
+            
+            # Moving Averages
+            indicators['sma_20'] = talib.SMA(close_prices, timeperiod=20)[-1]
+            indicators['sma_50'] = talib.SMA(close_prices, timeperiod=50)[-1]
+            
+            # MACD
+            macd, macd_signal, macd_hist = talib.MACD(close_prices)
+            indicators['macd'] = macd[-1]
+            indicators['macd_signal'] = macd_signal[-1]
+            indicators['macd_hist'] = macd_hist[-1]
+            
+            # Bollinger Bands
+            bb_upper, bb_middle, bb_lower = talib.BBANDS(close_prices, timeperiod=20, nbdevup=2, nbdevdn=2)
+            indicators['bb_upper'] = bb_upper[-1]
+            indicators['bb_middle'] = bb_middle[-1]
+            indicators['bb_lower'] = bb_lower[-1]
+            indicators['bb_position'] = (close_prices[-1] - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1])
+            
+            return indicators
+        except Exception as e:
+            logging.error(f"خطا در محاسبه اندیکاتورها: {e}")
+            return {}
     
     def analyze_trend(self, data: pd.DataFrame) -> Dict:
         """تحلیل روند و سقف/کف‌ها"""
         if len(data) < 20:
             return {}
         
-        # تحلیل 4 ساعت گذشته (16 کندل 15 دقیقه‌ای)
-        recent_data = data.tail(16)
-        highs = recent_data['High'].values
-        lows = recent_data['Low'].values
-        
-        # یافتن سقف و کف‌ها
-        higher_highs = 0
-        lower_highs = 0
-        higher_lows = 0
-        lower_lows = 0
-        
-        for i in range(1, len(highs)):
-            if highs[i] > highs[i-1]:
-                higher_highs += 1
-            elif highs[i] < highs[i-1]:
-                lower_highs += 1
-                
-            if lows[i] > lows[i-1]:
-                higher_lows += 1
-            elif lows[i] < lows[i-1]:
-                lower_lows += 1
-        
-        trend_analysis = {
-            'higher_highs': higher_highs,
-            'lower_highs': lower_highs,
-            'higher_lows': higher_lows,
-            'lower_lows': lower_lows,
-            'trend_strength': (higher_highs + higher_lows - lower_highs - lower_lows) / 30
-        }
-        
-        return trend_analysis
+        try:
+            # تحلیل 4 ساعت گذشته (16 کندل 15 دقیقه‌ای)
+            recent_data = data.tail(16)
+            highs = recent_data['High'].values
+            lows = recent_data['Low'].values
+            
+            # یافتن سقف و کف‌ها
+            higher_highs = 0
+            lower_highs = 0
+            higher_lows = 0
+            lower_lows = 0
+            
+            for i in range(1, len(highs)):
+                if highs[i] > highs[i-1]:
+                    higher_highs += 1
+                elif highs[i] < highs[i-1]:
+                    lower_highs += 1
+                    
+                if lows[i] > lows[i-1]:
+                    higher_lows += 1
+                elif lows[i] < lows[i-1]:
+                    lower_lows += 1
+            
+            trend_analysis = {
+                'higher_highs': higher_highs,
+                'lower_highs': lower_highs,
+                'higher_lows': higher_lows,
+                'lower_lows': lower_lows,
+                'trend_strength': (higher_highs + higher_lows - lower_highs - lower_lows) / 30
+            }
+            
+            return trend_analysis
+        except Exception as e:
+            logging.error(f"خطا در تحلیل روند: {e}")
+            return {}
     
     def get_signal_strength(self, indicators: Dict, trend_analysis: Dict) -> Tuple[str, float, str]:
         """محاسبه قدرت سیگنال"""
-        confirmation_count = 0
-        total_indicators = 5
-        
-        current_price = indicators.get('current_price', 0)
-        sma_20 = indicators.get('sma_20', 0)
-        sma_50 = indicators.get('sma_50', 0)
-        rsi = indicators.get('rsi', 50)
-        macd_hist = indicators.get('macd_hist', 0)
-        bb_position = indicators.get('bb_position', 0.5)
-        trend_strength = trend_analysis.get('trend_strength', 0)
-        
-        # تحلیل RSI
-        if rsi < 30:
-            rsi_signal = "خرید"
-            confirmation_count += 1
-        elif rsi > 70:
-            rsi_signal = "فروش"
-            confirmation_count += 1
-        else:
-            rsi_signal = "خنثی"
-        
-        # تحلیل موینگ اوریج
-        if sma_20 > sma_50 and current_price > sma_20:
-            ma_signal = "خرید"
-            confirmation_count += 1
-        elif sma_20 < sma_50 and current_price < sma_20:
-            ma_signal = "فروش"
-            confirmation_count += 1
-        else:
-            ma_signal = "خنثی"
-        
-        # تحلیل MACD
-        if macd_hist > 0:
-            macd_signal = "خرید"
-            confirmation_count += 1
-        elif macd_hist < 0:
-            macd_signal = "فروش"
-            confirmation_count += 1
-        else:
-            macd_signal = "خنثی"
-        
-        # تحلیل بولینگر باند
-        if bb_position < 0.2:
-            bb_signal = "خرید"
-            confirmation_count += 1
-        elif bb_position > 0.8:
-            bb_signal = "فروش"
-            confirmation_count += 1
-        else:
-            bb_signal = "خنثی"
-        
-        # تحلیل روند
-        if trend_strength > 0.1:
-            trend_signal = "خرید"
-            confirmation_count += 1
-        elif trend_strength < -0.1:
-            trend_signal = "فروش"
-            confirmation_count += 1
-        else:
-            trend_signal = "خنثی"
-        
-        # محاسبه درصد اطمینان
-        if confirmation_count == total_indicators:
-            confidence = 80
-        elif confirmation_count == total_indicators - 1:
-            confidence = 70
-        elif confirmation_count == total_indicators - 2:
-            confidence = 60
-        else:
-            confidence = 50
-        
-        # تعیین جهت کلی بازار
-        buy_signals = sum([1 for signal in [rsi_signal, ma_signal, macd_signal, bb_signal, trend_signal] if signal == "خرید"])
-        sell_signals = sum([1 for signal in [rsi_signal, ma_signal, macd_signal, bb_signal, trend_signal] if signal == "فروش"])
-        
-        if buy_signals > sell_signals:
-            market_direction = "صعودی"
-            action = "خرید"
-        elif sell_signals > buy_signals:
-            market_direction = "نزولی"
-            action = "فروش"
-        else:
-            market_direction = "رنج"
-            action = "انتظار"
-        
-        signals_detail = {
-            'RSI': rsi_signal,
-            'MA': ma_signal,
-            'MACD': macd_signal,
-            'Bollinger': bb_signal,
-            'Trend': trend_signal
-        }
-        
-        return market_direction, confidence, action, signals_detail
+        try:
+            confirmation_count = 0
+            total_indicators = 5
+            
+            current_price = indicators.get('current_price', 0)
+            sma_20 = indicators.get('sma_20', 0)
+            sma_50 = indicators.get('sma_50', 0)
+            rsi = indicators.get('rsi', 50)
+            macd_hist = indicators.get('macd_hist', 0)
+            bb_position = indicators.get('bb_position', 0.5)
+            trend_strength = trend_analysis.get('trend_strength', 0)
+            
+            # تحلیل RSI
+            if rsi < 30:
+                rsi_signal = "خرید"
+                confirmation_count += 1
+            elif rsi > 70:
+                rsi_signal = "فروش"
+                confirmation_count += 1
+            else:
+                rsi_signal = "خنثی"
+            
+            # تحلیل موینگ اوریج
+            if sma_20 > sma_50 and current_price > sma_20:
+                ma_signal = "خرید"
+                confirmation_count += 1
+            elif sma_20 < sma_50 and current_price < sma_20:
+                ma_signal = "فروش"
+                confirmation_count += 1
+            else:
+                ma_signal = "خنثی"
+            
+            # تحلیل MACD
+            if macd_hist > 0:
+                macd_signal = "خرید"
+                confirmation_count += 1
+            elif macd_hist < 0:
+                macd_signal = "فروش"
+                confirmation_count += 1
+            else:
+                macd_signal = "خنثی"
+            
+            # تحلیل بولینگر باند
+            if bb_position < 0.2:
+                bb_signal = "خرید"
+                confirmation_count += 1
+            elif bb_position > 0.8:
+                bb_signal = "فروش"
+                confirmation_count += 1
+            else:
+                bb_signal = "خنثی"
+            
+            # تحلیل روند
+            if trend_strength > 0.1:
+                trend_signal = "خرید"
+                confirmation_count += 1
+            elif trend_strength < -0.1:
+                trend_signal = "فروش"
+                confirmation_count += 1
+            else:
+                trend_signal = "خنثی"
+            
+            # محاسبه درصد اطمینان
+            if confirmation_count == total_indicators:
+                confidence = 80
+            elif confirmation_count == total_indicators - 1:
+                confidence = 70
+            elif confirmation_count == total_indicators - 2:
+                confidence = 60
+            else:
+                confidence = 50
+            
+            # تعیین جهت کلی بازار
+            buy_signals = sum([1 for signal in [rsi_signal, ma_signal, macd_signal, bb_signal, trend_signal] if signal == "خرید"])
+            sell_signals = sum([1 for signal in [rsi_signal, ma_signal, macd_signal, bb_signal, trend_signal] if signal == "فروش"])
+            
+            if buy_signals > sell_signals:
+                market_direction = "صعودی"
+                action = "خرید"
+            elif sell_signals > buy_signals:
+                market_direction = "نزولی"
+                action = "فروش"
+            else:
+                market_direction = "رنج"
+                action = "انتظار"
+            
+            signals_detail = {
+                'RSI': rsi_signal,
+                'MA': ma_signal,
+                'MACD': macd_signal,
+                'Bollinger': bb_signal,
+                'Trend': trend_signal
+            }
+            
+            return market_direction, confidence, action, signals_detail
+        except Exception as e:
+            logging.error(f"خطا در محاسبه قدرت سیگنال: {e}")
+            return "نامشخص", 0, "نامشخص", {}
     
     def get_daily_summary(self) -> str:
         """گزارش روزانه قیمت فلزات"""
@@ -243,22 +274,30 @@ class MetalMarketAnalyzer:
             for metal_name, symbol in self.metals.items():
                 data_30d = self.get_metal_data(symbol, '1mo')
                 if data_30d is not None and len(data_30d) > 0:
-                    current_price = data_30d['Close'][-1]
-                    price_30d_ago = data_30d['Close'][0]
-                    change_percent = ((current_price - price_30d_ago) / price_30d_ago) * 100
+                    # استفاده از iloc به جای [] برای جلوگیری از هشدار
+                    current_price = data_30d['Close'].iloc[-1] if len(data_30d) > 0 else 0
+                    price_30d_ago = data_30d['Close'].iloc[0] if len(data_30d) > 0 else 0
+                    
+                    if price_30d_ago > 0:
+                        change_percent = ((current_price - price_30d_ago) / price_30d_ago) * 100
+                    else:
+                        change_percent = 0
                     
                     change_emoji = "📈" if change_percent > 0 else "📉"
                     
                     message += f"{metal_name.upper()}:\n"
                     message += f"💰 قیمت فعلی: ${current_price:.2f}\n"
                     message += f"{change_emoji} تغییر 30 روزه: {change_percent:+.2f}%\n\n"
+                else:
+                    message += f"{metal_name.upper()}:\n"
+                    message += "⚠️ داده‌ای دریافت نشد\n\n"
             
             message += "🔄 به روزرسانی بعدی: 4 ساعت دیگر\n"
             message += "#گزارش_روزانه #فلزات"
             
             return message
         except Exception as e:
-            logging.error(f"Error generating daily summary: {e}")
+            logging.error(f"خطا در تولید گزارش روزانه: {e}")
             return "خطا در تولید گزارش روزانه"
     
     def analyze_metal(self, metal_name: str) -> str:
@@ -273,7 +312,11 @@ class MetalMarketAnalyzer:
                 return f"داده کافی برای {metal_name} موجود نیست"
             
             indicators = self.calculate_indicators(data)
-            indicators['current_price'] = data['Close'][-1]
+            if not indicators:
+                return f"خطا در محاسبه اندیکاتورهای {metal_name}"
+            
+            # استفاده از iloc به جای [] برای جلوگیری از هشدار
+            indicators['current_price'] = data['Close'].iloc[-1] if len(data) > 0 else 0
             
             trend_analysis = self.analyze_trend(data)
             
@@ -291,9 +334,9 @@ class MetalMarketAnalyzer:
                 emoji = "✅" if signal == action else "➖" if signal == "خنثی" else "❌"
                 message += f"{emoji} {indicator_name}: {signal}\n"
             
-            message += f"\n📊 RSI: {indicators['rsi']:.1f}"
-            message += f"\n📊 موقعیت در بولینگر: {indicators['bb_position']*100:.1f}%"
-            message += f"\n💪 قدرت روند: {trend_analysis['trend_strength']*100:.1f}%"
+            message += f"\n📊 RSI: {indicators.get('rsi', 0):.1f}"
+            message += f"\n📊 موقعیت در بولینگر: {indicators.get('bb_position', 0.5)*100:.1f}%"
+            message += f"\n💪 قدرت روند: {trend_analysis.get('trend_strength', 0)*100:.1f}%"
             
             message += f"\n\n⏰ زمان تحلیل: {datetime.now().strftime('%H:%M')}"
             message += f"\n🔄 به روزرسانی بعدی: 4 ساعت دیگر"
@@ -301,7 +344,7 @@ class MetalMarketAnalyzer:
             
             return message
         except Exception as e:
-            logging.error(f"Error analyzing {metal_name}: {e}")
+            logging.error(f"خطا در تحلیل {metal_name}: {e}")
             return f"خطا در تحلیل {metal_name}"
     
     def send_telegram_message(self, message: str):
@@ -313,47 +356,66 @@ class MetalMarketAnalyzer:
                 'text': message,
                 'parse_mode': 'HTML'
             }
-            response = requests.post(url, data=payload)
+            
+            logging.info(f"ارسال پیام به تلگرام: {message[:100]}...")
+            response = requests.post(url, data=payload, timeout=30)
+            
             if response.status_code == 200:
                 logging.info("پیام با موفقیت ارسال شد")
             else:
-                logging.error(f"خطا در ارسال پیام: {response.status_code}")
+                logging.error(f"خطا در ارسال پیام: {response.status_code} - {response.text}")
+                # اطلاعات بیشتر برای دیباگ
+                logging.error(f"URL: {url}")
+                logging.error(f"Channel ID: {self.channel_id}")
+                
+        except requests.exceptions.Timeout:
+            logging.error("Timeout در ارسال پیام به تلگرام")
+        except requests.exceptions.ConnectionError:
+            logging.error("Connection Error در ارسال پیام به تلگرام")
         except Exception as e:
-            logging.error(f"Error sending Telegram message: {e}")
+            logging.error(f"خطای غیرمنتظره در ارسال پیام: {e}")
     
     def run_analysis(self):
         """اجرای تحلیل اصلی"""
-        if not self.should_analyze():
-            logging.info("تحلیل لغو شد - بازار تعطیل است")
-            return
-        
-        now = datetime.now()
-        current_hour = now.hour
-        current_minute = now.minute
-        
-        # گزارش روزانه ساعت 4:30
-        if current_hour == 4 and current_minute >= 30:
-            logging.info("ارسال گزارش روزانه...")
-            daily_report = self.get_daily_summary()
-            self.send_telegram_message(daily_report)
-        
-        # تحلیل هر 4 ساعت از 5 صبح
-        analysis_hours = [5, 9, 13, 17, 21]
-        if current_hour in analysis_hours:
-            logging.info("شروع تحلیل فلزات...")
+        try:
+            logging.info("شروع تحلیل...")
             
-            # تحلیل طلا
-            gold_analysis = self.analyze_metal('gold')
-            self.send_telegram_message(gold_analysis)
+            if not self.should_analyze():
+                logging.info("تحلیل لغو شد - بازار تعطیل است")
+                return
             
-            # فاصله بین ارسال پیام‌ها
-            time.sleep(10)
+            now = datetime.now()
+            current_hour = now.hour
+            current_minute = now.minute
             
-            # تحلیل نقره
-            silver_analysis = self.analyze_metal('silver')
-            self.send_telegram_message(silver_analysis)
-        
-        logging.info("تحلیل заверш شد")
+            logging.info(f"زمان فعلی: {current_hour}:{current_minute}")
+            
+            # گزارش روزانه ساعت 4:30
+            if current_hour == 4 and current_minute >= 30:
+                logging.info("ارسال گزارش روزانه...")
+                daily_report = self.get_daily_summary()
+                self.send_telegram_message(daily_report)
+            
+            # تحلیل هر 4 ساعت از 5 صبح
+            analysis_hours = [5, 9, 13, 17, 21]
+            if current_hour in analysis_hours:
+                logging.info("شروع تحلیل فلزات...")
+                
+                # تحلیل طلا
+                gold_analysis = self.analyze_metal('gold')
+                self.send_telegram_message(gold_analysis)
+                
+                # فاصله بین ارسال پیام‌ها
+                time.sleep(10)
+                
+                # تحلیل نقره
+                silver_analysis = self.analyze_metal('silver')
+                self.send_telegram_message(silver_analysis)
+            
+            logging.info("تحلیل با موفقیت завер شد")
+            
+        except Exception as e:
+            logging.error(f"خطای کلی در اجرای برنامه: {e}")
 
 def main():
     try:
@@ -361,6 +423,7 @@ def main():
         analyzer.run_analysis()
     except Exception as e:
         logging.error(f"خطا در اجرای برنامه: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
