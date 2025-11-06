@@ -1,0 +1,38 @@
+name: Metal Market Analysis
+
+on:
+  schedule:
+    # هر 4 ساعت از ساعت 5 صبح تا 9 شب (بر اساس UTC)
+    # توجه: زمان‌ها بر اساس UTC است. ممکن است نیاز به تنظیم بر اساس منطقه زمانی شما باشد.
+    - cron: '0 5,9,13,17,21 * * *'
+  workflow_dispatch:  # اجازه اجرای دستی
+
+env:
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+        
+    - name: Install Python dependencies
+      run: |
+        pip install pandas numpy yfinance requests TA-Lib
+        
+    - name: Run analysis
+      run: |
+        python metal_analyzer.py
