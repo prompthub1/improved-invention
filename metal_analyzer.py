@@ -9,6 +9,7 @@ from typing import Dict, Tuple, List
 import talib
 import os
 import sys
+import pytz
 
 # تنظیمات پیشرفته لاگ‌گیری
 logging.basicConfig(
@@ -21,6 +22,9 @@ class MetalMarketAnalyzer:
         # دریافت توکن و آیدی از environment variables
         self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
+        
+        # تنظیم تایم‌زون ایران
+        self.iran_tz = pytz.timezone('Asia/Tehran')
         
         # اگر channel_id با @ شروع شود، باید به عدد تبدیل شود
         if self.channel_id and self.channel_id.startswith('@'):
@@ -38,6 +42,10 @@ class MetalMarketAnalyzer:
             'gold': 'GC=F',
             'silver': 'SI=F'
         }
+    
+    def get_iran_time(self):
+        """دریافت زمان فعلی ایران"""
+        return datetime.now(self.iran_tz)
     
     def convert_to_chat_id(self, channel_username: str) -> str:
         """تبدیل آیدی کانال به Chat ID عددی"""
@@ -65,27 +73,21 @@ class MetalMarketAnalyzer:
     
     def is_holiday(self, date: datetime) -> bool:
         """بررسی تعطیلی بازار - برای فارکس تعطیلی خاصی نداریم"""
-        # بازار فارکس 24/5 باز است و فقط آخر هفته‌ها بسته است
-        # این تابع را خالی می‌گذاریم چون فارکس تعطیلی رسمی ندارد
         return False
     
     def is_weekend(self, date: datetime) -> bool:
         """بررسی آخر هفته - فارکس فقط جمعه و شنبه بسته است"""
-        # بازار فارکس از یکشنبه تا جمعه باز است
-        # جمعه و شنبه بسته است (بر اساس بازارهای بین‌المللی)
         return date.weekday() >= 5  # 5=شنبه, 6=یکشنبه
     
     def should_analyze(self) -> bool:
         """بررسی زمان تحلیل - برای فارکس محدودیت زمانی نداریم"""
-        now = datetime.now()
+        now = self.get_iran_time()
         
         # فقط آخر هفته تحلیل نکن
         if self.is_weekend(now):
             logging.info("امروز بازار فارکس تعطیل است (آخر هفته)")
             return False
             
-        # برای فارکس هیچ محدودیت ساعتی نداریم
-        # بازار فارکس 24 ساعته از یکشنبه تا جمعه باز است
         return True
     
     def get_metal_data(self, symbol: str, period: str = '1mo') -> pd.DataFrame:
@@ -290,8 +292,9 @@ class MetalMarketAnalyzer:
     def get_daily_summary(self) -> str:
         """گزارش روزانه قیمت فلزات"""
         try:
+            iran_time = self.get_iran_time()
             message = "📊 گزارش روزانه فلزات 📊\n\n"
-            message += f"📅 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+            message += f"📅 تاریخ: {iran_time.strftime('%Y-%m-%d %H:%M')} (به وقت ایران)\n\n"
             
             for metal_name, symbol in self.metals.items():
                 data_30d = self.get_metal_data(symbol, '1mo')
@@ -345,6 +348,7 @@ class MetalMarketAnalyzer:
             market_direction, confidence, action, signals_detail = self.get_signal_strength(indicators, trend_analysis)
             
             # تولید پیام تحلیل
+            iran_time = self.get_iran_time()
             message = f"🔍 تحلیل {metal_name.upper()} - تایم‌فریم 15 دقیقه\n\n"
             message += f"💰 قیمت فعلی: ${indicators['current_price']:.2f}\n"
             message += f"📊 جهت بازار: {market_direction}\n"
@@ -360,7 +364,7 @@ class MetalMarketAnalyzer:
             message += f"\n📊 موقعیت در بولینگر: {indicators.get('bb_position', 0.5)*100:.1f}%"
             message += f"\n💪 قدرت روند: {trend_analysis.get('trend_strength', 0)*100:.1f}%"
             
-            message += f"\n\n⏰ زمان تحلیل: {datetime.now().strftime('%H:%M')}"
+            message += f"\n\n⏰ زمان تحلیل: {iran_time.strftime('%H:%M')} (به وقت ایران)"
             message += f"\n🔄 به روزرسانی بعدی: 4 ساعت دیگر"
             message += f"\n#{metal_name}_تحلیل #سیگنال"
             
@@ -405,17 +409,18 @@ class MetalMarketAnalyzer:
         try:
             logging.info("🚀 شروع تحلیل...")
             
+            # دریافت زمان ایران
+            iran_time = self.get_iran_time()
+            current_hour = iran_time.hour
+            current_minute = iran_time.minute
+            
+            logging.info(f"🕒 زمان فعلی ایران: {current_hour}:{current_minute:02d}")
+            
             if not self.should_analyze():
                 logging.info("⏸️ تحلیل لغو شد - بازار تعطیل است")
                 return
             
-            now = datetime.now()
-            current_hour = now.hour
-            current_minute = now.minute
-            
-            logging.info(f"🕒 زمان فعلی: {current_hour}:{current_minute:02d}")
-            
-            # گزارش روزانه ساعت 4:30
+            # گزارش روزانه ساعت 4:30 صبح به وقت ایران
             if current_hour == 4 and current_minute >= 30:
                 logging.info("📊 ارسال گزارش روزانه...")
                 daily_report = self.get_daily_summary()
@@ -425,7 +430,7 @@ class MetalMarketAnalyzer:
                 else:
                     logging.error("❌ خطا در ارسال گزارش روزانه")
             
-            # تحلیل هر 4 ساعت از 5 صبح
+            # تحلیل هر 4 ساعت از 5 صبح به وقت ایران
             analysis_hours = [5, 9, 13, 17, 21]
             if current_hour in analysis_hours:
                 logging.info("🔍 شروع تحلیل فلزات...")
@@ -448,6 +453,8 @@ class MetalMarketAnalyzer:
                     logging.info("✅ تحلیل نقره ارسال شد")
                 else:
                     logging.error("❌ خطا در ارسال تحلیل نقره")
+            else:
+                logging.info(f"⏰ ساعت {current_hour}:{current_minute:02d} برای تحلیل نیست. ساعات تحلیل: {analysis_hours}")
             
             logging.info("🎉 تحلیل با موفقیت تکمیل شد")
             
