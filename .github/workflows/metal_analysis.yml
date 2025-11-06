@@ -2,9 +2,9 @@ name: Metal Market Analysis
 
 on:
   schedule:
-    # هر 4 ساعت از ساعت 5 صبح تا 9 شب (بر اساس UTC)
-    # توجه: زمان‌ها بر اساس UTC است
-    - cron: '0 1,5,9,13,17 * * *'  # 5,9,13,17,21 به وقت ایران (UTC+3:30)
+    # هر 4 ساعت از ساعت 5 صبح تا 9 شب (به وقت ایران - UTC+3:30)
+    # زمان‌های اجرا به وقت UTC: 1:30, 5:30, 9:30, 13:30, 17:30
+    - cron: '30 1,5,9,13,17 * * *'
   workflow_dispatch:  # اجازه اجرای دستی
   push:
     branches: [ main ]
@@ -16,7 +16,6 @@ env:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 
     
     steps:
     - name: Checkout repository
@@ -34,7 +33,7 @@ jobs:
         
     - name: Install Python dependencies
       run: |
-        pip install pandas numpy yfinance requests TA-Lib
+        pip install pandas numpy yfinance requests TA-Lib pytz
         
     - name: Debug - Check environment variables
       run: |
