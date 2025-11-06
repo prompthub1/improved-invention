@@ -3,9 +3,11 @@ name: Metal Market Analysis
 on:
   schedule:
     # هر 4 ساعت از ساعت 5 صبح تا 9 شب (بر اساس UTC)
-    # توجه: زمان‌ها بر اساس UTC است. ممکن است نیاز به تنظیم بر اساس منطقه زمانی شما باشد.
-    - cron: '0 5,9,13,17,21 * * *'
+    # توجه: زمان‌ها بر اساس UTC است
+    - cron: '0 1,5,9,13,17 * * *'  # 5,9,13,17,21 به وقت ایران (UTC+3:30)
   workflow_dispatch:  # اجازه اجرای دستی
+  push:
+    branches: [ main ]
 
 env:
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -32,6 +34,11 @@ jobs:
     - name: Install Python dependencies
       run: |
         pip install pandas numpy yfinance requests TA-Lib
+        
+    - name: Debug - Check environment variables
+      run: |
+        echo "TELEGRAM_BOT_TOKEN length: ${#TELEGRAM_BOT_TOKEN}"
+        echo "TELEGRAM_CHANNEL_ID: $TELEGRAM_CHANNEL_ID"
         
     - name: Run analysis
       run: |
